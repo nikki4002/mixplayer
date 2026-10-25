@@ -1,6 +1,9 @@
 package com.matheus.mixplayer
 
 import android.Manifest
+import android.app.Activity
+import android.provider.MediaStore
+import androidx.activity.result.IntentSenderRequest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -176,15 +179,26 @@ fun MixApp(controller: MediaController?, store: Store) {
     var granted by remember { mutableStateOf(hasAudioPermission(context)) }
     var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
     var tab by remember { mutableIntStateOf(0) }
+    var reloadKey by remember { mutableIntStateOf(0) }
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { granted = hasAudioPermission(context) }
 
+    // Apagar música: o Android mostra a própria confirmação (createDeleteRequest).
+    val deleteLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result -> if (result.resultCode == Activity.RESULT_OK) reloadKey++ }
+
+    fun requestDelete(song: Song) {
+        val pending = MediaStore.createDeleteRequest(context.contentResolver, listOf(song.uri))
+        deleteLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
+    }
+
     LaunchedEffect(Unit) {
         if (!granted) launcher.launch(requiredPermissions())
     }
-    LaunchedEffect(granted) {
+    LaunchedEffect(granted, reloadKey) {
         if (granted) songs = withContext(Dispatchers.IO) { MusicRepository.load(context) }
     }
 
@@ -204,8 +218,20 @@ fun MixApp(controller: MediaController?, store: Store) {
                     NavigationBarItem(
                         selected = tab == 1,
                         onClick = { tab = 1 },
+                        icon = { Text("☰") },
+                        label = { Text("Playlists") },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 2,
+                        onClick = { tab = 2 },
                         icon = { Text("♥") },
                         label = { Text("Mix") },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 3,
+                        onClick = { tab = 3 },
+                        icon = { Text("⬇") },
+                        label = { Text("Baixar") },
                     )
                 }
             }
@@ -225,9 +251,17 @@ fun MixApp(controller: MediaController?, store: Store) {
                 )
             }
         } else if (tab == 0) {
-            SongsScreen(songs, store, controller, ui.mediaId, Modifier.padding(padding))
-        } else {
+            SongsScreen(
+                songs, store, controller, ui.mediaId,
+                onDelete = { requestDelete(it) },
+                modifier = Modifier.padding(padding),
+            )
+        } else if (tab == 1) {
+            PlaylistsScreen(songs, store, controller, Modifier.padding(padding))
+        } else if (tab == 2) {
             MixScreen(songs, store, controller, Modifier.padding(padding))
+        } else {
+            DownloadScreen(onDownloaded = { reloadKey++ }, modifier = Modifier.padding(padding))
         }
     }
 }
@@ -258,60 +292,6 @@ fun PlayerBar(ui: PlayerUi, controller: Player?) {
                 controller?.let { if (it.isPlaying) it.pause() else it.play() }
             }) { Text(if (ui.isPlaying) "⏸" else "▶") }
             TextButton(onClick = { controller?.seekToNextMediaItem() }) { Text("⏭") }
-        }
-    }
-}
-
-@Composable
-fun SongsScreen(
-    songs: List<Song>,
-    store: Store,
-    controller: Player?,
-    currentId: String,
-    modifier: Modifier = Modifier,
-) {
-    var query by remember { mutableStateOf("") }
-    var favs by remember { mutableStateOf(store.favs()) }
-    val shown = remember(songs, query) {
-        if (query.isBlank()) songs
-        else songs.filter {
-            it.title.contains(query, ignoreCase = true) || it.artist.contains(query, ignoreCase = true)
-        }
-    }
-
-    Column(modifier) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text("Buscar música ou artista") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-        )
-        if (songs.isEmpty()) {
-            Text("Nenhuma música encontrada no celular.", Modifier.padding(16.dp))
-        }
-        LazyColumn(Modifier.weight(1f)) {
-            itemsIndexed(shown, key = { _, s -> s.id }) { index, song ->
-                val current = song.id.toString() == currentId
-                ListItem(
-                    headlineContent = {
-                        Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    },
-                    supportingContent = {
-                        Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    },
-                    trailingContent = {
-                        TextButton(onClick = { favs = store.toggleFav(song.key) }) {
-                            Text(if (song.key in favs) "★" else "☆")
-                        }
-                    },
-                    colors = ListItemDefaults.colors(
-                        containerColor = if (current) MaterialTheme.colorScheme.secondaryContainer
-                        else MaterialTheme.colorScheme.surface
-                    ),
-                    modifier = Modifier.clickable { playList(controller, shown, index) },
-                )
-            }
         }
     }
 }
